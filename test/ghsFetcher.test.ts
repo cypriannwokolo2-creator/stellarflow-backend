@@ -27,7 +27,7 @@ async function run() {
     const directRate = await fetcher.fetchRate();
     assert.equal(directRate.currency, 'GHS');
     assert.equal(directRate.rate, 2.45);
-    assert.equal(directRate.source, 'CoinGecko');
+    assert.equal(directRate.source, 'Median of 1 sources');
 
     let exchangeRateRequested = false;
 
@@ -63,7 +63,7 @@ async function run() {
     assert.equal(exchangeRateRequested, true);
     assert.equal(fallbackRate.currency, 'GHS');
     assert.equal(fallbackRate.rate, 2);
-    assert.equal(fallbackRate.source, 'CoinGecko + ExchangeRate API');
+    assert.equal(fallbackRate.source, 'Median of 2 sources');
   } finally {
     axios.get = originalGet;
   }

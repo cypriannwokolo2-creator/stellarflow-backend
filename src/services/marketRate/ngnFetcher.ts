@@ -1,224 +1,243 @@
-import axios, { AxiosError } from "axios";
-import {
-  MarketRateFetcher,
-  MarketRate,
-  RateSource,
-  RateFetchError,
-  calculateMedian,
-} from "./types";
+import axios from "axios";
+import { MarketRateFetcher, MarketRate, calculateMedian } from "./types";
 
-/**
- * Binance Ticker Response Interface
- */
-interface BinanceTickerResponse {
-  symbol: string;
-  lastPrice: string;
-  [key: string]: unknown;
+type CoinGeckoPriceResponse = {
+  stellar?: {
+    ngn?: number;
+    usd?: number;
+    last_updated_at?: number;
+  };
+};
+
+type ExchangeRateApiResponse = {
+  result?: string;
+  rates?: {
+    NGN?: number;
+  };
+  time_last_update_unix?: number;
+};
+
+type VtpassVariation = {
+  variation_code: string;
+  name: string;
+  variation_amount: string;
+  variation_rate?: string;
+  fixedPrice?: string;
+};
+
+type VtpassVariationsResponse = {
+  response_description: string;
+  content?: {
+    variations?: VtpassVariation[];
+  };
+};
+
+function parseAmount(value: string | undefined): number | null {
+  if (value == null) return null;
+  const n = Number.parseFloat(String(value).replace(/,/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
 }
 
 /**
- * Binance P2P Response Interface
- */
-interface BinanceP2PResponse {
-  data?: Array<{
-    adv?: {
-      price: string;
-      asset: string;
-      fiatUnit: string;
-    };
-    [key: string]: unknown;
-  }>;
-  success?: boolean;
-}
-
-/**
- * Circuit Breaker States
- */
-enum CircuitState {
-  CLOSED = "CLOSED",
-  OPEN = "OPEN",
-  HALF_OPEN = "HALF_OPEN",
-}
-
-/**
- * Circuit Breaker Configuration
- */
-interface CircuitBreakerConfig {
-  failureThreshold: number;
-  recoveryTimeoutMs: number;
-  halfOpenMaxAttempts: number;
-}
-
-/**
- * Circuit Breaker Implementation
- */
-class CircuitBreaker {
-  private state: CircuitState = CircuitState.CLOSED;
-  private failureCount = 0;
-  private lastFailureTime: Date | null = null;
-  private halfOpenAttempts = 0;
-
-  constructor(private readonly config: CircuitBreakerConfig) {}
-
-  async execute<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.state === CircuitState.OPEN) {
-      if (this.shouldAttemptRecovery()) {
-        this.state = CircuitState.HALF_OPEN;
-        this.halfOpenAttempts = 0;
-      } else {
-        throw new Error("Circuit breaker is OPEN");
-      }
-    }
-
-    if (this.state === CircuitState.HALF_OPEN) {
-      this.halfOpenAttempts++;
-      if (this.halfOpenAttempts > this.config.halfOpenMaxAttempts) {
-        throw new Error("Circuit breaker half-open limit exceeded");
-      }
-    }
-
-    try {
-      const result = await operation();
-      this.onSuccess();
-      return result;
-    } catch (error) {
-      this.onFailure();
-      throw error;
-    }
-  }
-
-  private onSuccess(): void {
-    this.failureCount = 0;
-    if (this.state === CircuitState.HALF_OPEN) {
-      this.state = CircuitState.CLOSED;
-    }
-  }
-
-  private onFailure(): void {
-    this.failureCount++;
-    this.lastFailureTime = new Date();
-    if (this.state === CircuitState.HALF_OPEN || this.failureCount >= this.config.failureThreshold) {
-      this.state = CircuitState.OPEN;
-    }
-  }
-
-  private shouldAttemptRecovery(): boolean {
-    if (!this.lastFailureTime) return true;
-    return Date.now() - this.lastFailureTime.getTime() >= this.config.recoveryTimeoutMs;
-  }
-
-  getState(): CircuitState {
-    return this.state;
-  }
-}
-
-/**
- * Retry Configuration
- */
-interface RetryConfig {
-  maxAttempts: number;
-  baseDelayMs: number;
-  maxDelayMs: number;
-  backoffMultiplier: number;
-}
-
-/**
- * Retry with exponential backoff
- */
-async function withRetry<T>(
-  operation: () => Promise<T>,
-  config: RetryConfig,
-  operationName: string
-): Promise<T> {
-  let lastError: Error | null = null;
-  for (let attempt = 1; attempt <= config.maxAttempts; attempt++) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (attempt < config.maxAttempts) {
-        const delay = Math.min(
-          config.baseDelayMs * Math.pow(config.backoffMultiplier, attempt - 1),
-          config.maxDelayMs
-        );
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-  throw lastError || new Error(`${operationName} failed`);
-}
-
-/**
- * NGN/XLM Rate Fetcher
+ * NGN/XLM rate fetcher.
+ *
+ * Primary path uses VTpass {@link https://www.vtpass.com/documentation/variation-codes/ service-variations}
+ * to read a configured variation's `variation_amount` as the Naira price for one unit of the underlying
+ * SKU (configure a 1 USD/BUSD reference variation so `variation_amount` ≈ NGN per USD). That value is
+ * multiplied by CoinGecko XLM/USD for NGN per XLM.
+ *
+ * Falls back to CoinGecko XLM/NGN directly, then XLM/USD × USD→NGN (open.er-api), matching other fetchers.
  */
 export class NGNRateFetcher implements MarketRateFetcher {
-  private readonly circuitBreaker: CircuitBreaker;
-  private readonly retryConfig: RetryConfig;
-  private readonly BINANCE_P2P_URL = "https://p2p-api.binance.com/bapi/c2c/v2/public/c2c/adv/search";
-  private readonly BINANCE_SPOT_URL = "https://api.binance.com/api/v3/ticker/price";
-  private readonly COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price?ids=stellar&vs_currencies=ngn&include_last_updated_at=true";
-  private readonly EXCHANGE_RATE_URL = "https://open.er-api.com/v6/latest/USD";
+  private readonly coinGeckoUrl =
+    "https://api.coingecko.com/api/v3/simple/price?ids=stellar&vs_currencies=ngn,usd&include_last_updated_at=true";
 
-  // Approximate fallback rate if everything else fails but we have USD price
-  private readonly APPROXIMATE_NGN_USD_RATE = 1500; 
+  private readonly usdToNgnUrl = "https://open.er-api.com/v6/latest/USD";
 
-  constructor() {
-    this.circuitBreaker = new CircuitBreaker({
-      failureThreshold: 5,
-      recoveryTimeoutMs: 30000,
-      halfOpenMaxAttempts: 3,
-    });
+  private vtpassBase(): string {
+    return (
+      process.env.VTPASS_API_BASE_URL ?? "https://vtpass.com/api"
+    ).replace(/\/$/, "");
+  }
 
-    this.retryConfig = {
-      maxAttempts: 3,
-      baseDelayMs: 500,
-      maxDelayMs: 5000,
-      backoffMultiplier: 2,
-    };
+  private vtpassHeaders(): Record<string, string> | undefined {
+    const apiKey = process.env.VTPASS_API_KEY;
+    const publicKey = process.env.VTPASS_PUBLIC_KEY;
+    if (apiKey && publicKey) {
+      return {
+        "api-key": apiKey,
+        "public-key": publicKey,
+      };
+    }
+    return undefined;
   }
 
   getCurrency(): string {
     return "NGN";
   }
 
+  private async fetchNgnPerUsdFromVtpass(): Promise<{
+    ngnPerUsd: number;
+    timestamp: Date;
+  } | null> {
+    const serviceId = process.env.VTPASS_NGN_SERVICE_ID?.trim();
+    const variationCode = process.env.VTPASS_NGN_VARIATION_CODE?.trim();
+    if (!serviceId || !variationCode) return null;
+
+    const headers = this.vtpassHeaders();
+    if (!headers) return null;
+
+    const response = await axios.get<VtpassVariationsResponse>(
+      `${this.vtpassBase()}/service-variations`,
+      {
+        params: { serviceID: serviceId },
+        timeout: 15000,
+        headers: {
+          ...headers,
+          "User-Agent": "StellarFlow-Oracle/1.0",
+        },
+      },
+    );
+
+    if (response.data.response_description !== "000") {
+      return null;
+    }
+
+    const variations = response.data.content?.variations ?? [];
+    const match = variations.find(
+      (v) => v.variation_code === variationCode,
+    );
+    if (!match) return null;
+
+    const rateFromField = parseAmount(match.variation_rate);
+    const amount = parseAmount(match.variation_amount);
+    const ngnPerUsd = rateFromField ?? amount;
+    if (ngnPerUsd == null) return null;
+
+    return { ngnPerUsd, timestamp: new Date() };
+  }
+
   async fetchRate(): Promise<MarketRate> {
     const prices: { rate: number; timestamp: Date; source: string }[] = [];
-    const errors: RateFetchError[] = [];
 
-    // Strategy 1: Binance P2P (Direct or via USDT)
+    // Strategy 1: VTpass NGN-per-USD (variation) × CoinGecko XLM/USD
     try {
-      const binanceP2PRate = await this.circuitBreaker.execute(() =>
-        withRetry(() => this.fetchBinanceP2PRate(), this.retryConfig, "Binance P2P")
+      const vt = await this.fetchNgnPerUsdFromVtpass();
+      if (vt) {
+        const coinGeckoResponse = await axios.get<CoinGeckoPriceResponse>(
+          this.coinGeckoUrl,
+          {
+            timeout: 10000,
+            headers: {
+              "User-Agent": "StellarFlow-Oracle/1.0",
+            },
+          },
+        );
+
+        const usd = coinGeckoResponse.data.stellar?.usd;
+        if (typeof usd === "number" && usd > 0) {
+          const lastUpdatedAt = coinGeckoResponse.data.stellar?.last_updated_at
+            ? new Date(
+                coinGeckoResponse.data.stellar.last_updated_at * 1000,
+              )
+            : new Date();
+          const ts =
+            vt.timestamp > lastUpdatedAt ? vt.timestamp : lastUpdatedAt;
+          prices.push({
+            rate: usd * vt.ngnPerUsd,
+            timestamp: ts,
+            source: "VTpass variation + CoinGecko (XLM/USD)",
+          });
+        }
+      }
+    } catch {
+      console.debug("VTpass + CoinGecko XLM/USD failed");
+    }
+
+    // Strategy 2: CoinGecko direct XLM/NGN
+    try {
+      const coinGeckoResponse = await axios.get<CoinGeckoPriceResponse>(
+        this.coinGeckoUrl,
+        {
+          timeout: 10000,
+          headers: {
+            "User-Agent": "StellarFlow-Oracle/1.0",
+          },
+        },
       );
-      if (binanceP2PRate) {
+
+      const stellarPrice = coinGeckoResponse.data.stellar;
+      if (
+        stellarPrice &&
+        typeof stellarPrice.ngn === "number" &&
+        stellarPrice.ngn > 0
+      ) {
+        const lastUpdatedAt = stellarPrice.last_updated_at
+          ? new Date(stellarPrice.last_updated_at * 1000)
+          : new Date();
+
         prices.push({
-          rate: binanceP2PRate.rate,
-          timestamp: binanceP2PRate.timestamp,
-          source: binanceP2PRate.source,
+          rate: stellarPrice.ngn,
+          timestamp: lastUpdatedAt,
+          source: "CoinGecko (direct NGN)",
         });
       }
-    } catch (error) {
-      errors.push({ source: "Binance P2P", message: String(error), timestamp: new Date() });
+    } catch {
+      console.debug("CoinGecko direct NGN failed");
     }
 
-    // Strategy 2: CoinGecko XLM/NGN
+    // Strategy 3: CoinGecko XLM/USD × USD/NGN (open.er-api)
     try {
-      const coingeckoRate = await withRetry(() => this.fetchCoinGeckoRate(), this.retryConfig, "CoinGecko");
-      if (coingeckoRate) {
-        prices.push(coingeckoRate);
-      }
-    } catch (error) {
-      errors.push({ source: "CoinGecko", message: String(error), timestamp: new Date() });
-    }
+      const coinGeckoResponse = await axios.get<CoinGeckoPriceResponse>(
+        this.coinGeckoUrl,
+        {
+          timeout: 10000,
+          headers: {
+            "User-Agent": "StellarFlow-Oracle/1.0",
+          },
+        },
+      );
 
-    // Strategy 3: XLM/USD * USD/NGN (ExchangeRate API)
-    try {
-      const crossRate = await withRetry(() => this.fetchCrossRate(), this.retryConfig, "Cross Rate (USD)");
-      if (crossRate) {
-        prices.push(crossRate);
+      const stellarPrice = coinGeckoResponse.data.stellar;
+      if (
+        stellarPrice &&
+        typeof stellarPrice.usd === "number" &&
+        stellarPrice.usd > 0
+      ) {
+        const fxResponse = await axios.get<ExchangeRateApiResponse>(
+          this.usdToNgnUrl,
+          {
+            timeout: 10000,
+            headers: {
+              "User-Agent": "StellarFlow-Oracle/1.0",
+            },
+          },
+        );
+
+        const usdToNgn = fxResponse.data.rates?.NGN;
+        if (
+          fxResponse.data.result === "success" &&
+          typeof usdToNgn === "number" &&
+          usdToNgn > 0
+        ) {
+          const fxTimestamp = fxResponse.data.time_last_update_unix
+            ? new Date(fxResponse.data.time_last_update_unix * 1000)
+            : new Date();
+          const lastUpdatedAt = stellarPrice.last_updated_at
+            ? new Date(stellarPrice.last_updated_at * 1000)
+            : new Date();
+
+          prices.push({
+            rate: stellarPrice.usd * usdToNgn,
+            timestamp:
+              fxTimestamp > lastUpdatedAt ? fxTimestamp : lastUpdatedAt,
+            source: "CoinGecko + ExchangeRate API (USD→NGN)",
+          });
+        }
       }
-    } catch (error) {
-      errors.push({ source: "ExchangeRate API Cross", message: String(error), timestamp: new Date() });
+    } catch {
+      console.debug("CoinGecko + ExchangeRate API (NGN) failed");
     }
 
     if (prices.length > 0) {
@@ -226,7 +245,7 @@ export class NGNRateFetcher implements MarketRateFetcher {
       const medianRate = calculateMedian(rateValues);
       const mostRecentTimestamp = prices.reduce(
         (latest, p) => (p.timestamp > latest ? p.timestamp : latest),
-        prices[0]!.timestamp
+        prices[0]?.timestamp ?? new Date(),
       );
 
       return {
@@ -237,120 +256,7 @@ export class NGNRateFetcher implements MarketRateFetcher {
       };
     }
 
-    const errorMsg = errors.map((e) => `${e.source}: ${e.message}`).join("; ");
-    throw new Error(`All NGN rate sources failed. Errors: ${errorMsg}`);
-  }
-
-  private async fetchBinanceP2PRate(): Promise<{ rate: number; timestamp: Date; source: string } | null> {
-    try {
-      // First try XLM/NGN P2P
-      const response = await axios.post<BinanceP2PResponse>(
-        this.BINANCE_P2P_URL,
-        {
-          fiat: "NGN",
-          asset: "XLM",
-          merchantCheck: false,
-          rows: 5,
-          page: 1,
-          tradeType: "BUY",
-        },
-        { timeout: 8000 }
-      );
-
-      if (response.data?.data && response.data.data.length > 0) {
-        const prices = response.data.data
-          .map((item) => parseFloat(item.adv?.price || "0"))
-          .filter((p) => p > 0);
-        if (prices.length > 0) {
-          return {
-            rate: prices.reduce((a, b) => a + b, 0) / prices.length,
-            timestamp: new Date(),
-            source: "Binance P2P (XLM)",
-          };
-        }
-      }
-
-      // If XLM P2P is empty, try USDT/NGN * XLM/USDT
-      const usdtNgnResponse = await axios.post<BinanceP2PResponse>(
-        this.BINANCE_P2P_URL,
-        {
-          fiat: "NGN",
-          asset: "USDT",
-          merchantCheck: false,
-          rows: 5,
-          page: 1,
-          tradeType: "BUY",
-        },
-        { timeout: 8000 }
-      );
-
-      const xlmUsdtResponse = await axios.get<BinanceTickerResponse>(this.BINANCE_SPOT_URL, {
-        params: { symbol: "XLMUSDT" },
-        timeout: 8000,
-      });
-
-      if (usdtNgnResponse.data?.data && usdtNgnResponse.data.data.length > 0 && xlmUsdtResponse.data?.lastPrice) {
-        const usdtNgnPrices = usdtNgnResponse.data.data
-          .map((item) => parseFloat(item.adv?.price || "0"))
-          .filter((p) => p > 0);
-        const xlmUsdtPrice = parseFloat(xlmUsdtResponse.data.lastPrice);
-
-        if (usdtNgnPrices.length > 0 && xlmUsdtPrice > 0) {
-          const avgUsdtNgn = usdtNgnPrices.reduce((a, b) => a + b, 0) / usdtNgnPrices.length;
-          return {
-            rate: avgUsdtNgn * xlmUsdtPrice,
-            timestamp: new Date(),
-            source: "Binance P2P (USDT Cross)",
-          };
-        }
-      }
-
-      return null;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  private async fetchCoinGeckoRate(): Promise<{ rate: number; timestamp: Date; source: string } | null> {
-    try {
-      const response = await axios.get(this.COINGECKO_URL, { timeout: 8000 });
-      if (response.data?.stellar?.ngn) {
-        return {
-          rate: response.data.stellar.ngn,
-          timestamp: response.data.stellar.last_updated_at 
-            ? new Date(response.data.stellar.last_updated_at * 1000) 
-            : new Date(),
-          source: "CoinGecko",
-        };
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  private async fetchCrossRate(): Promise<{ rate: number; timestamp: Date; source: string } | null> {
-    try {
-      const fxResponse = await axios.get(this.EXCHANGE_RATE_URL, { timeout: 8000 });
-      const xlmUsdResponse = await axios.get(this.BINANCE_SPOT_URL, {
-        params: { symbol: "XLMUSDT" },
-        timeout: 8000,
-      });
-
-      const usdNgnRate = fxResponse.data?.rates?.NGN;
-      const xlmUsdPrice = parseFloat(xlmUsdResponse.data?.lastPrice || "0");
-
-      if (usdNgnRate > 0 && xlmUsdPrice > 0) {
-        return {
-          rate: usdNgnRate * xlmUsdPrice,
-          timestamp: new Date(),
-          source: "Binance + ExchangeRate API",
-        };
-      }
-      return null;
-    } catch {
-      return null;
-    }
+    throw new Error("All NGN rate sources failed");
   }
 
   async isHealthy(): Promise<boolean> {
