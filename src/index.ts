@@ -1,9 +1,11 @@
 import express from "express";
+import { createServer } from "http";
 import cors from "cors";
 import dotenv from "dotenv";
 import { Horizon } from "@stellar/stellar-sdk";
 import marketRatesRouter from "./routes/marketRates";
 import prisma from "./lib/prisma";
+import { initSocket } from "./lib/socket";
 
 // Load environment variables
 dotenv.config();
@@ -125,12 +127,16 @@ app.use("*", (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+const httpServer = createServer(app);
+initSocket(httpServer);
+
+httpServer.listen(PORT, () => {
   console.log(`🌊 StellarFlow Backend running on port ${PORT}`);
   console.log(
     `📊 Market Rates API available at http://localhost:${PORT}/api/market-rates`,
   );
   console.log(`🏥 Health check at http://localhost:${PORT}/health`);
+  console.log(`🔌 Socket.io ready for dashboard connections`);
 });
 
 export default app;

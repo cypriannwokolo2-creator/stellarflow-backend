@@ -8,6 +8,7 @@ import { KESRateFetcher } from "./kesFetcher";
 import { GHSRateFetcher } from "./ghsFetcher";
 import { NGNRateFetcher } from "./ngnFetcher";
 import { StellarService } from "../stellarService";
+import { getIO } from "../../lib/socket";
 
 export class MarketRateService {
   private fetchers: Map<string, MarketRateFetcher> = new Map();
@@ -65,6 +66,13 @@ export class MarketRateService {
         rate,
         expiry: new Date(Date.now() + this.CACHE_DURATION_MS),
       });
+
+      // Broadcast fresh price to all connected dashboard clients
+      try {
+        getIO().emit("price:update", { currency: currency.toUpperCase(), rate });
+      } catch {
+        // Socket not initialized yet (e.g. during tests) — skip silently
+      }
 
       return {
         success: true,
