@@ -9,6 +9,8 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://user:pass@localhost:5432/stellarflow
     steps:
       - uses: actions/checkout@v4
 
@@ -22,8 +24,6 @@ jobs:
 
       - name: Generate Prisma Client
         run: npx prisma generate
-        env:
-          DATABASE_URL: "postgresql://user:pass@localhost:5432/db"
 
       - name: Typecheck
         run: npm run build
