@@ -1,101 +1,88 @@
-import assert from 'node:assert/strict';
-import axios from 'axios';
-import { NGNRateFetcher } from '../src/services/marketRate/ngnFetcher';
+import assert from "node:assert/strict";
+import axios from "axios";
+import { NGNRateFetcher } from "../src/services/marketRate/ngnFetcher";
 
 async function run() {
   const originalGet = axios.get;
-  const originalPost = axios.post;
+  const savedEnv = {
+    VTPASS_API_KEY: process.env.VTPASS_API_KEY,
+    VTPASS_PUBLIC_KEY: process.env.VTPASS_PUBLIC_KEY,
+    VTPASS_NGN_SERVICE_ID: process.env.VTPASS_NGN_SERVICE_ID,
+    VTPASS_NGN_VARIATION_CODE: process.env.VTPASS_NGN_VARIATION_CODE,
+  };
 
   try {
+    process.env.VTPASS_API_KEY = "test-key";
+    process.env.VTPASS_PUBLIC_KEY = "PK_test";
+    process.env.VTPASS_NGN_SERVICE_ID = "test-service";
+    process.env.VTPASS_NGN_VARIATION_CODE = "ref-usd";
+
     const fetcher = new NGNRateFetcher();
 
-    // Test Case 1: CoinGecko successful
     axios.get = (async (url: string) => {
-      if (url.includes('api.coingecko.com')) {
+      if (url.includes("service-variations")) {
+        return {
+          data: {
+            response_description: "000",
+            content: {
+              variations: [
+                {
+                  variation_code: "ref-usd",
+                  name: "1 USD reference",
+                  variation_amount: "1500.00",
+                  fixedPrice: "Yes",
+                },
+              ],
+            },
+          },
+        };
+      }
+
+      if (url.includes("api.coingecko.com")) {
         return {
           data: {
             stellar: {
-              ngn: 250,
-              last_updated_at: Math.floor(Date.now() / 1000)
-            }
-          }
+              ngn: 300,
+              usd: 0.2,
+              last_updated_at: 1_774_464_561,
+            },
+          },
         };
       }
-      return { data: {} };
+
+      if (url.includes("open.er-api.com")) {
+        return {
+          data: {
+            result: "success",
+            rates: {
+              NGN: 7500,
+            },
+            time_last_update_unix: 1_774_396_951,
+          },
+        };
+      }
+
+      throw new Error(`Unexpected URL: ${url}`);
     }) as typeof axios.get;
 
-    axios.post = (async () => ({ data: { data: [] } })) as typeof axios.post;
-
-    const rateResult = await fetcher.fetchRate();
-    assert.equal(rateResult.currency, 'NGN');
-    assert.ok(rateResult.rate > 0);
-    console.log('✅ CoinGecko strategy test passed');
-
-    // Test Case 2: Binance P2P successful
-    axios.post = (async (url: string, data: any) => {
-      if (url.includes('p2p-api.binance.com')) {
-        if (data.asset === 'XLM') {
-          return {
-            data: {
-              success: true,
-              data: [
-                { adv: { price: '260' } },
-                { adv: { price: '270' } }
-              ]
-            }
-          };
-        }
-      }
-      return { data: { data: [] } };
-    }) as typeof axios.post;
-
-    const p2pRateResult = await fetcher.fetchRate();
-    assert.equal(p2pRateResult.currency, 'NGN');
-    // Median of 250 (CoinGecko) and 265 (Binance P2P avg) is 257.5
-    assert.equal(p2pRateResult.rate, 257.5);
-    console.log('✅ Binance P2P strategy test passed');
-
-    // Test Case 3: Cross Rate successful (USDT P2P + XLMUSDT Spot)
-    axios.post = (async (url: string, data: any) => {
-      if (url.includes('p2p-api.binance.com')) {
-        if (data.asset === 'USDT') {
-          return {
-            data: {
-              success: true,
-              data: [{ adv: { price: '1500' } }]
-            }
-          };
-        }
-      }
-      return { data: { data: [] } };
-    }) as typeof axios.post;
-
-    axios.get = (async (url: string, config: any) => {
-      if (url.includes('api.binance.com') && config?.params?.symbol === 'XLMUSDT') {
-        return { data: { lastPrice: '0.2' } };
-      }
-      if (url.includes('api.coingecko.com')) {
-        return { data: { stellar: { ngn: 300 } } };
-      }
-      return { data: {} };
-    }) as typeof axios.get;
-
-    const crossRateResult = await fetcher.fetchRate();
-    // Sources: CoinGecko (300), Binance USDT Cross (1500 * 0.2 = 300)
-    // Median of [300, 300] is 300
-    assert.equal(crossRateResult.rate, 300);
-    console.log('✅ Cross rate strategy test passed');
-
-  } catch (error) {
-    console.error('❌ Test failed:', error);
-    process.exit(1);
+    const rate = await fetcher.fetchRate();
+    assert.equal(rate.currency, "NGN");
+    // VTpass path: 1500 * 0.2 = 300; CoinGecko NGN: 300; FX path: 0.2 * 7500 = 1500 → median 300
+    assert.equal(rate.rate, 300);
+    assert.match(rate.source, /^Median of \d+ sources$/);
   } finally {
     axios.get = originalGet;
-    axios.post = originalPost;
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = val;
+      }
+    }
   }
 }
 
 run().catch((error) => {
   console.error(error);
-  process.exit(1);
+  process.exitCode = 1;
 });
