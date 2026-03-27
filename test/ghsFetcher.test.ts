@@ -64,6 +64,36 @@ async function run() {
     assert.equal(fallbackRate.currency, 'GHS');
     assert.equal(fallbackRate.rate, 2);
     assert.equal(fallbackRate.source, 'CoinGecko + ExchangeRate API');
+
+    axios.get = (async (url: string) => {
+      if (url.includes('api.coingecko.com')) {
+        return {
+          data: {
+            stellar: {
+              ghs: Number.NaN,
+              usd: 0.2,
+              last_updated_at: 1_774_464_561
+            }
+          }
+        };
+      }
+
+      if (url.includes('open.er-api.com')) {
+        return {
+          data: {
+            result: 'success',
+            rates: {
+              GHS: undefined
+            },
+            time_last_update_unix: 1_774_396_951
+          }
+        };
+      }
+
+      throw new Error(`Unexpected URL: ${url}`);
+    }) as typeof axios.get;
+
+    await assert.rejects(() => fetcher.fetchRate(), /Price must be a positive number|usable GHS rate/);
   } finally {
     axios.get = originalGet;
   }

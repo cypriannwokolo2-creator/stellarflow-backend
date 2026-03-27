@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { validatePrice } from './validation';
 export class GHSRateFetcher {
     coinGeckoUrl = 'https://api.coingecko.com/api/v3/simple/price?ids=stellar&vs_currencies=ghs,usd&include_last_updated_at=true';
     usdToGhsUrl = 'https://open.er-api.com/v6/latest/USD';
@@ -20,17 +21,18 @@ export class GHSRateFetcher {
             const lastUpdatedAt = stellarPrice.last_updated_at
                 ? new Date(stellarPrice.last_updated_at * 1000)
                 : new Date();
-            if (typeof stellarPrice.ghs === 'number' && stellarPrice.ghs > 0) {
+            if (typeof stellarPrice.ghs === 'number') {
                 return {
                     currency: 'GHS',
-                    rate: stellarPrice.ghs,
+                    rate: validatePrice(stellarPrice.ghs),
                     timestamp: lastUpdatedAt,
                     source: 'CoinGecko'
                 };
             }
-            if (typeof stellarPrice.usd !== 'number' || stellarPrice.usd <= 0) {
+            if (typeof stellarPrice.usd !== 'number') {
                 throw new Error('CoinGecko did not return a usable USD price for Stellar');
             }
+            const usdPrice = validatePrice(stellarPrice.usd);
             const exchangeRateResponse = await axios.get(this.usdToGhsUrl, {
                 timeout: 10000,
                 headers: {
@@ -38,17 +40,16 @@ export class GHSRateFetcher {
                 }
             });
             const usdToGhsRate = exchangeRateResponse.data.rates?.GHS;
-            if (exchangeRateResponse.data.result !== 'success' ||
-                typeof usdToGhsRate !== 'number' ||
-                usdToGhsRate <= 0) {
+            if (exchangeRateResponse.data.result !== 'success' || typeof usdToGhsRate !== 'number') {
                 throw new Error('USD to GHS conversion feed did not return a usable GHS rate');
             }
+            const validatedUsdToGhsRate = validatePrice(usdToGhsRate);
             const fxTimestamp = exchangeRateResponse.data.time_last_update_unix
                 ? new Date(exchangeRateResponse.data.time_last_update_unix * 1000)
                 : lastUpdatedAt;
             return {
                 currency: 'GHS',
-                rate: stellarPrice.usd * usdToGhsRate,
+                rate: validatePrice(usdPrice * validatedUsdToGhsRate),
                 timestamp: fxTimestamp > lastUpdatedAt ? fxTimestamp : lastUpdatedAt,
                 source: 'CoinGecko + ExchangeRate API'
             };

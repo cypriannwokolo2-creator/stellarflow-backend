@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { validatePrice } from './validation';
 export class KESRateFetcher {
     sources = [
         {
@@ -60,7 +61,7 @@ export class KESRateFetcher {
                 const latestRate = rates[0];
                 return {
                     currency: 'KES',
-                    rate: parseFloat(latestRate.rate),
+                    rate: validatePrice(Number(latestRate.rate)),
                     timestamp: new Date(latestRate.date),
                     source: this.sources[0].name
                 };
@@ -83,7 +84,7 @@ export class KESRateFetcher {
                 }
             });
             // Placeholder rate - in reality, you'd parse the actual response
-            const placeholderRate = 130.5; // Approximate KES/USD rate
+            const placeholderRate = validatePrice(130.5); // Approximate KES/USD rate
             return {
                 currency: 'KES',
                 rate: placeholderRate,
