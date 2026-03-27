@@ -14,6 +14,9 @@ export interface MarketRate {
   comparisonRate?: number;
   comparisonTimestamp?: Date;
   contractSubmissionSkipped?: boolean;
+  // Multi-sig fields
+  pendingMultiSig?: boolean;
+  multiSigPriceId?: number;
 }
 
 /**
@@ -184,7 +187,9 @@ export function calculateWeightedAverage(values: WeightedPriceInput[]): number {
  * Rate Fetch Statistics
  * Performance and reliability metrics
  */
-export { filterOutliers, isOutlier, percentDeviation } from '../../logic/outlierFilter';\n\export interface RateFetchStats {
+export { filterOutliers, isOutlier, percentDeviation } from '../../logic/outlierFilter';
+
+export interface RateFetchStats {
   totalRequests: number;
   successfulRequests: number;
   failedRequests: number;
