@@ -10,6 +10,54 @@ const RANGE_MAP: Record<string, number> = {
   "90d": 90,
 };
 
+/**
+ * @swagger
+ * /api/history/{asset}:
+ *   get:
+ *     tags:
+ *       - History
+ *     summary: Get price history for an asset
+ *     description: Retrieve historical price data for a specific asset within a specified time range
+ *     parameters:
+ *       - in: path
+ *         name: asset
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Asset code (e.g., GHS, NGN, KES)
+ *         example: GHS
+ *       - in: query
+ *         name: range
+ *         schema:
+ *           type: string
+ *           enum: ['1d', '7d', '30d', '90d']
+ *           default: '7d'
+ *         description: Time range for historical data
+ *     responses:
+ *       '200':
+ *         description: Successfully retrieved price history
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 asset:
+ *                   type: string
+ *                 range:
+ *                   type: string
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/PriceHistory'
+ *       '400':
+ *         description: Invalid range parameter
+ *       '404':
+ *         description: No history found for the asset
+ *       '500':
+ *         description: Internal server error
+ */
 // GET /api/history/:asset?range=7d
 router.get("/:asset", async (req, res) => {
   const asset = req.params.asset.toUpperCase();
@@ -48,11 +96,13 @@ router.get("/:asset", async (req, res) => {
       success: true,
       asset,
       range: rangeParam,
-      data: rows.map((r: { timestamp: Date; rate: unknown; source: string }) => ({
-        timestamp: r.timestamp.toISOString(),
-        rate: Number(r.rate),
-        source: r.source,
-      })),
+      data: rows.map(
+        (r: { timestamp: Date; rate: unknown; source: string }) => ({
+          timestamp: r.timestamp.toISOString(),
+          rate: Number(r.rate),
+          source: r.source,
+        }),
+      ),
     });
   } catch (error) {
     res.status(500).json({
