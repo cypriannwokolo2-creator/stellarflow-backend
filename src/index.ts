@@ -18,6 +18,7 @@ import { SorobanEventListener } from "./services/sorobanEventListener";
 import { specs } from "./lib/swagger";
 import { multiSigSubmissionService } from "./services/multiSigSubmissionService";
 import { apiKeyMiddleware } from "./middleware/apiKeyMiddleware";
+import { rateLimitMiddleware } from "./middleware/rateLimitMiddleware";
 import { validateEnv } from "./utils/envValidator";
 import { hourlyAverageService } from "./services/hourlyAverageService";
 
@@ -47,7 +48,9 @@ if (missingEnvVars.length > 0) {
 }
 
 const dashboardUrl =
-  process.env.DASHBOARD_URL || process.env.FRONTEND_URL || "http://localhost:3000";
+  process.env.DASHBOARD_URL ||
+  process.env.FRONTEND_URL ||
+  "http://localhost:3000";
 
 if (!dashboardUrl) {
   console.error("❌ Missing required environment variable: DASHBOARD_URL");
@@ -105,6 +108,10 @@ app.get(
     customSiteTitle: "StellarFlow API Documentation",
   }),
 );
+
+// Apply Rate Limiting to all /api routes
+app.use("/api", rateLimitMiddleware);
+
 // Apply API Key Middleware to all /api routes
 app.use("/api", apiKeyMiddleware);
 
@@ -258,7 +265,7 @@ app.use(
 );
 
 // 404 handler
-app.use("*", (req, res) => {
+app.use((req, res) => {
   res.status(404).json({
     success: false,
     error: "Endpoint not found",
@@ -367,7 +374,7 @@ httpServer.listen(PORT, () => {
     } catch (err) {
       console.warn(
         "Multi-sig submission service not started:",
-        err instanceof Error ? err.message : err
+        err instanceof Error ? err.message : err,
       );
     }
   }
@@ -381,7 +388,7 @@ httpServer.listen(PORT, () => {
   } catch (err) {
     console.warn(
       "Hourly average service not started:",
-      err instanceof Error ? err.message : err
+      err instanceof Error ? err.message : err,
     );
   }
 });
