@@ -9,6 +9,7 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import dotenv from "dotenv";
+import { assertSigningAllowed } from "../state/appState";
 
 dotenv.config();
 
@@ -62,6 +63,8 @@ export class StellarService {
     price: number,
     memoId: string,
   ): Promise<string> {
+    await assertSigningAllowed();
+
     const baseFee = parseInt(await this.getRecommendedFee(), 10);
 
     const result = await this.submitTransactionWithRetries(
@@ -104,6 +107,8 @@ export class StellarService {
     if (updates.length === 0) {
       throw new Error("Cannot submit empty batch of price updates");
     }
+
+    await assertSigningAllowed();
 
     const baseFee = parseInt(await this.getRecommendedFee(), 10);
 
@@ -151,6 +156,8 @@ export class StellarService {
     memoId: string,
     signatures: Array<{ signerPublicKey: string; signature: string }>,
   ): Promise<string> {
+    await assertSigningAllowed();
+
     const baseFee = parseInt(await this.getRecommendedFee(), 10);
 
     const result = await this.submitMultiSignedTransaction(
@@ -208,8 +215,10 @@ export class StellarService {
         );
 
         const transaction = builderFn(sourceAccount, currentFee);
+        await assertSigningAllowed();
         transaction.sign(this.keypair);
 
+        await assertSigningAllowed();
         return await this.server.submitTransaction(transaction);
       } catch (error: any) {
         attempt++;
@@ -266,6 +275,7 @@ export class StellarService {
         const transaction = builderFn(sourceAccount, currentFee);
 
         // Sign with the local keypair first
+        await assertSigningAllowed();
         transaction.sign(this.keypair);
 
         // Add signatures from other signers
@@ -299,6 +309,7 @@ export class StellarService {
           }
         }
 
+        await assertSigningAllowed();
         return await this.server.submitTransaction(transaction);
       } catch (error: any) {
         attempt++;

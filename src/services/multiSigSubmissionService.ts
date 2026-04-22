@@ -3,6 +3,7 @@ import { StellarService } from "./stellarService";
 import { priceReviewService } from "./priceReviewService";
 import prisma from "../lib/prisma";
 import dotenv from "dotenv";
+import { isLockdownEnabled } from "../state/appState";
 
 dotenv.config();
 
@@ -66,6 +67,10 @@ export class MultiSigSubmissionService {
    */
   private async checkAndSubmitApprovedPrices(): Promise<void> {
     try {
+      if (await isLockdownEnabled()) {
+        return;
+      }
+
       // Find all approved multi-sig prices that haven't been submitted yet
       const approvedPrices = await prisma.multiSigPrice.findMany({
         where: {
