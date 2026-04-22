@@ -19,7 +19,10 @@ export const getDerivedRate = async (req: Request, res: Response) => {
       });
     }
 
-    const result = await derivedAssetService.getDerivedRate(base, quote);
+    const result = await derivedAssetService.getDerivedRate(
+      base as string,
+      quote as string,
+    );
 
     if (result.success) {
       return res.json(result);
