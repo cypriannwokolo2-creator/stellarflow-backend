@@ -2,6 +2,7 @@ import { Router } from "express";
 import { getRate, getAllRates } from "../controllers/marketRatesController";
 import { MarketRateService } from "../services/marketRate";
 import { isLockdownError } from "../state/appState";
+import { sanitizeMarketRateQuery } from "../middleware/payloadSanitizer";
 
 const marketRateService = new MarketRateService();
 
@@ -40,8 +41,8 @@ const marketRateService = new MarketRateService();
  */
 const router = Router();
 
-// Get rate for specific currency
-router.get("/rate/:currency", getRate);
+// Get rate for specific currency (with sanitization)
+router.get("/rate/:currency", sanitizeMarketRateQuery, getRate);
 
 /**
  * @swagger
