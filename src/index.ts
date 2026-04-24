@@ -15,6 +15,7 @@ import { enableGlobalLogMasking } from "./utils/logMasker";
 import { hourlyAverageService } from "./services/hourlyAverageService";
 import { metricsMiddleware, metricsEndpoint } from "./middleware/metrics";
 import { watchConfig } from "./config/configWatcher";
+import { startEnvFileWatcher } from "./config/envFileWatcher";
 
 // Load environment variables
 dotenv.config();
@@ -196,11 +197,16 @@ const httpServer = createServer(app);
 initSocket(httpServer);
 let sorobanEventListener: SorobanEventListener | null = null;
 let isShuttingDown = false;
+let stopEnvFileWatcher: (() => void) | undefined;
 const stopConfigWatcher = watchConfig((cfg) => {
   sorobanEventListener?.restart(cfg.sorobanPollIntervalMs);
   multiSigSubmissionService.restart(cfg.multiSigPollIntervalMs);
   hourlyAverageService.restart(cfg.hourlyAverageCheckIntervalMs);
 });
+
+if (process.env.ENABLE_ENV_FILE_WATCHER === "true") {
+  stopEnvFileWatcher = startEnvFileWatcher();
+}
 
 const closeHttpServer = (): Promise<void> =>
   new Promise((resolve, reject) => {
@@ -235,6 +241,7 @@ const shutdown = async (signal: "SIGINT" | "SIGTERM"): Promise<void> => {
     multiSigSubmissionService.stop();
     hourlyAverageService.stop();
     stopConfigWatcher();
+    stopEnvFileWatcher?.();
 
     await closeHttpServer();
     console.log("HTTP server closed.");

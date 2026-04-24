@@ -13,10 +13,10 @@ import assetsRouter from "./routes/assets";
 import statusRouter from "./routes/status";
 import adminRouter from "./routes/admin";
 import derivedAssetsRouter from "./routes/derivedAssets";
-import adminRouter from "./routes/admin";
 import { apiKeyMiddleware } from "./middleware/apiKeyMiddleware";
 import { rateLimitMiddleware } from "./middleware/rateLimitMiddleware";
 import { maintenanceMiddleware } from "./middleware/maintenanceMiddleware";
+import { adminMiddleware } from "./middleware/adminMiddleware";
 import { specs } from "./lib/swagger";
 
 dotenv.config();
@@ -96,7 +96,7 @@ app.use("/api", rateLimitMiddleware);
 app.use("/api", apiKeyMiddleware);
 app.use("/api/v1", apiKeyMiddleware);
 
-app.use("/api/admin", adminRouter);
+app.use("/api/admin", adminMiddleware, adminRouter);
 app.use("/api/v1/market-rates", marketRatesRouter);
 app.use("/api/v1/history", historyRouter);
 app.use("/api/v1/stats", statsRouter);
@@ -105,7 +105,6 @@ app.use("/api/v1/price-updates", priceUpdatesRouter);
 app.use("/api/v1/assets", assetsRouter);
 app.use("/api/v1/status", statusRouter);
 app.use("/api/v1/derived-assets", derivedAssetsRouter);
-app.use("/api/admin", adminRouter);
 
 app.get("/", (req, res) => {
   res.json({
@@ -127,6 +126,9 @@ app.get("/", (req, res) => {
       },
       admin: {
         lockdown: "POST /api/admin/lockdown",
+        reportSummary:
+          "/api/admin/reports/summary?format=html|pdf&month=YYYY-MM",
+        reloadSecret: "POST /api/admin/reload-secret",
       },
       history: {
         assetHistory: "/api/v1/history/:asset?range=1d|7d|30d|90d",
@@ -134,9 +136,6 @@ app.get("/", (req, res) => {
       derivedAssets: {
         crossRate: "/api/v1/derived-assets/rate/:base/:quote",
         ngnGhs: "/api/v1/derived-assets/ngn-ghs",
-      },
-      admin: {
-        reportSummary: "/api/admin/reports/summary?format=html|pdf&month=YYYY-MM",
       },
     },
   });
