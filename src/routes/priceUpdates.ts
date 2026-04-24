@@ -1,5 +1,6 @@
 import express, { Request, Response } from "express";
 import { multiSigService, SignaturePayload } from "../services/multiSigService";
+import { isLockdownError } from "../state/appState";
 
 const router = express.Router();
 
@@ -111,9 +112,9 @@ router.post("/sign", async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error("[API] Signature creation failed:", error);
-    res.status(400).json({
+    res.status(isLockdownError(error) ? error.statusCode : 400).json({
       success: false,
-      error: String(error),
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 });

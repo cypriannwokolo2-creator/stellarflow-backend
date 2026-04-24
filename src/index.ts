@@ -14,6 +14,7 @@ import { validateEnv } from "./utils/envValidator";
 import { enableGlobalLogMasking } from "./utils/logMasker";
 import { hourlyAverageService } from "./services/hourlyAverageService";
 import { metricsMiddleware, metricsEndpoint } from "./middleware/metrics";
+import { watchConfig } from "./config/configWatcher";
 
 // Load environment variables
 dotenv.config();
@@ -195,6 +196,11 @@ const httpServer = createServer(app);
 initSocket(httpServer);
 let sorobanEventListener: SorobanEventListener | null = null;
 let isShuttingDown = false;
+const stopConfigWatcher = watchConfig((cfg) => {
+  sorobanEventListener?.restart(cfg.sorobanPollIntervalMs);
+  multiSigSubmissionService.restart(cfg.multiSigPollIntervalMs);
+  hourlyAverageService.restart(cfg.hourlyAverageCheckIntervalMs);
+});
 
 const closeHttpServer = (): Promise<void> =>
   new Promise((resolve, reject) => {
@@ -228,6 +234,7 @@ const shutdown = async (signal: "SIGINT" | "SIGTERM"): Promise<void> => {
     sorobanEventListener?.stop();
     multiSigSubmissionService.stop();
     hourlyAverageService.stop();
+    stopConfigWatcher();
 
     await closeHttpServer();
     console.log("HTTP server closed.");

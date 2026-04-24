@@ -84,6 +84,21 @@ export class SorobanEventListener {
     console.log("[EventListener] Stopped");
   }
 
+  restart(newIntervalMs: number): void {
+    if (!this.isRunning) return;
+    if (newIntervalMs === this.pollIntervalMs) return;
+    this.pollIntervalMs = newIntervalMs;
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+    }
+    this.pollTimer = setInterval(() => {
+      this.pollTransactions().catch((err) => {
+        console.error("[EventListener] Poll error:", err);
+      });
+    }, this.pollIntervalMs);
+    console.info(`[EventListener] Poll interval updated to ${this.pollIntervalMs}ms`);
+  }
+
   private async pollTransactions(): Promise<void> {
     try {
       // Refresh the server reference in case a failover occurred since last poll
