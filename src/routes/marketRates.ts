@@ -4,6 +4,7 @@ import { MarketRateService } from "../services/marketRate";
 import { cacheMiddleware, invalidateCache } from "../cache/CacheMiddleware";
 import { CACHE_CONFIG, CACHE_KEYS } from "../config/redis.config";
 import { isLockdownError } from "../state/appState";
+import { sanitizeMarketRateQuery } from "../middleware/payloadSanitizer";
 
 const marketRateService = new MarketRateService();
 
