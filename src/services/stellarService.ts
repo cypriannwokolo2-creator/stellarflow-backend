@@ -9,34 +9,33 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import dotenv from "dotenv";
+import stellarProvider from "../lib/stellarProvider";
 import { assertSigningAllowed } from "../state/appState";
+import { getSecretKey } from "./secretManager";
 
 dotenv.config();
 
 export class StellarService {
   private server: Horizon.Server;
-  private keypair: Keypair;
   private network: string;
   private readonly MAX_RETRIES = 3;
   private readonly FEE_INCREMENT_PERCENTAGE = 0.5; // 50% increase each retry
   private readonly RETRY_DELAY_MS = 2000; // 2 seconds delay between retries
 
   constructor() {
-    const secret =
-      process.env.ORACLE_SECRET_KEY || process.env.SOROBAN_ADMIN_SECRET;
-    if (!secret) {
-      throw new Error("Stellar secret key not found in environment variables");
-    }
-
-    this.keypair = Keypair.fromSecret(secret);
     this.network = process.env.STELLAR_NETWORK || "TESTNET";
 
-    const horizonUrl =
-      this.network === "PUBLIC"
-        ? "https://horizon.stellar.org"
-        : "https://horizon-testnet.stellar.org";
+    // Use the shared StellarProvider so all services benefits from the same
+    // failover state rather than each managing their own Horizon URL.
+    this.server = stellarProvider.getServer();
+  }
 
-    this.server = new Horizon.Server(horizonUrl);
+  /**
+   * Returns a Keypair derived from the currently active secret key.
+   * Called at sign time so key rotations are reflected immediately.
+   */
+  private getKeypair(): Keypair {
+    return Keypair.fromSecret(getSecretKey());
   }
 
   /**
@@ -207,8 +206,11 @@ export class StellarService {
 
     while (attempt <= maxRetries) {
       try {
+        // Always resolve the current active server — may have changed after a failover
+        this.server = stellarProvider.getServer();
+
         const sourceAccount = await this.server.loadAccount(
-          this.keypair.publicKey(),
+          this.getKeypair().publicKey(),
         );
         const currentFee = Math.floor(
           baseFee * (1 + this.FEE_INCREMENT_PERCENTAGE * attempt),
@@ -216,12 +218,16 @@ export class StellarService {
 
         const transaction = builderFn(sourceAccount, currentFee);
         await assertSigningAllowed();
-        transaction.sign(this.keypair);
+        transaction.sign(this.getKeypair());
 
         await assertSigningAllowed();
         return await this.server.submitTransaction(transaction);
       } catch (error: any) {
         attempt++;
+
+        // Report to the provider — it will switch to the next node if this is
+        // a 5xx / network error, so the next attempt uses a healthy node.
+        stellarProvider.reportFailure(error);
 
         const isStuck = this.isStuckError(error);
 
@@ -265,8 +271,11 @@ export class StellarService {
 
     while (attempt <= maxRetries) {
       try {
+        // Always resolve the current active server — may have changed after a failover
+        this.server = stellarProvider.getServer();
+
         const sourceAccount = await this.server.loadAccount(
-          this.keypair.publicKey(),
+          this.getKeypair().publicKey(),
         );
         const currentFee = Math.floor(
           baseFee * (1 + this.FEE_INCREMENT_PERCENTAGE * attempt),
@@ -276,12 +285,12 @@ export class StellarService {
 
         // Sign with the local keypair first
         await assertSigningAllowed();
-        transaction.sign(this.keypair);
+        transaction.sign(this.getKeypair());
 
         // Add signatures from other signers
         for (const sig of signatures) {
           // Skip if this is the local signer's public key (already signed)
-          if (sig.signerPublicKey === this.keypair.publicKey()) {
+          if (sig.signerPublicKey === this.getKeypair().publicKey()) {
             continue;
           }
 
@@ -313,6 +322,10 @@ export class StellarService {
         return await this.server.submitTransaction(transaction);
       } catch (error: any) {
         attempt++;
+
+        // Report to the provider — it will switch to the next node if this is
+        // a 5xx / network error, so the next attempt uses a healthy node.
+        stellarProvider.reportFailure(error);
 
         const isStuck = this.isStuckError(error);
 
