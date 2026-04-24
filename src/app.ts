@@ -4,23 +4,21 @@ import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
 import swaggerUi from "swagger-ui-express";
+import cacheMetricsRouter from "./cache/CacheMetrics";
 import { specs } from "./lib/swagger";
 import { apiKeyMiddleware } from "./middleware/apiKeyMiddleware";
+import { maintenanceMiddleware } from "./middleware/maintenanceMiddleware";
 import { rateLimitMiddleware } from "./middleware/rateLimitMiddleware";
+import adminRouter from "./routes/admin";
 import assetsRouter from "./routes/assets";
+import derivedAssetsRouter from "./routes/derivedAssets";
 import historyRouter from "./routes/history";
 import intelligenceRouter from "./routes/intelligence";
 import marketRatesRouter from "./routes/marketRates";
 import priceUpdatesRouter from "./routes/priceUpdates";
+import sanityCheckRouter from "./routes/sanityCheck";
 import statsRouter from "./routes/stats";
 import statusRouter from "./routes/status";
-import adminRouter from "./routes/admin";
-import derivedAssetsRouter from "./routes/derivedAssets";
-import adminRouter from "./routes/admin";
-import { apiKeyMiddleware } from "./middleware/apiKeyMiddleware";
-import { rateLimitMiddleware } from "./middleware/rateLimitMiddleware";
-import { maintenanceMiddleware } from "./middleware/maintenanceMiddleware";
-import { specs } from "./lib/swagger";
 
 dotenv.config();
 
@@ -35,16 +33,13 @@ app.use(morgan("dev"));
 
 // Maintenance mode middleware: must be early in the chain
 app.use(maintenanceMiddleware);
+
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin) {
-        return callback(null, true);
-      }
+      if (!origin) return callback(null, true);
 
-      if (origin === dashboardUrl) {
-        return callback(null, true);
-      }
+      if (origin === dashboardUrl) return callback(null, true);
 
       return callback(
         new Error(
@@ -108,7 +103,8 @@ app.use("/api/v1/price-updates", priceUpdatesRouter);
 app.use("/api/v1/assets", assetsRouter);
 app.use("/api/v1/status", statusRouter);
 app.use("/api/v1/derived-assets", derivedAssetsRouter);
-app.use("/api/admin", adminRouter);
+app.use("/api/v1/sanity-check", sanityCheckRouter);
+app.use("/api/v1/cache", cacheMetricsRouter);
 
 app.get("/", (req, res) => {
   res.json({
@@ -128,9 +124,6 @@ app.get("/", (req, res) => {
       stats: {
         volume: "/api/v1/stats/volume?date=YYYY-MM-DD",
       },
-      admin: {
-        lockdown: "POST /api/admin/lockdown",
-      },
       history: {
         assetHistory: "/api/v1/history/:asset?range=1d|7d|30d|90d",
       },
@@ -139,7 +132,9 @@ app.get("/", (req, res) => {
         ngnGhs: "/api/v1/derived-assets/ngn-ghs",
       },
       admin: {
-        reportSummary: "/api/admin/reports/summary?format=html|pdf&month=YYYY-MM",
+        lockdown: "POST /api/admin/lockdown",
+        reportSummary:
+          "/api/admin/reports/summary?format=html|pdf&month=YYYY-MM",
       },
     },
   });
