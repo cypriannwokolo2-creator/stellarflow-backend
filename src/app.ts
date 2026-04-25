@@ -8,6 +8,7 @@ import cacheMetricsRouter from "./cache/CacheMetrics";
 import { specs } from "./lib/swagger";
 import { adminMiddleware } from "./middleware/adminMiddleware";
 import { apiKeyMiddleware } from "./middleware/apiKeyMiddleware";
+import { latencyValidationMiddleware } from "./middleware/latencyGuardMiddleware";
 import { maintenanceMiddleware } from "./middleware/maintenanceMiddleware";
 import { rateLimitMiddleware } from "./middleware/rateLimitMiddleware";
 import adminRouter from "./routes/admin";
@@ -94,6 +95,9 @@ app.get(
 app.use("/api", rateLimitMiddleware);
 app.use("/api", apiKeyMiddleware);
 app.use("/api/v1", apiKeyMiddleware);
+
+// Latency validation for relayer payloads - validates timestamps to prevent stale data
+app.use("/api/v1/price-updates", latencyValidationMiddleware);
 
 app.use("/api/admin", adminMiddleware, adminRouter);
 app.use("/api/v1/market-rates", marketRatesRouter);
