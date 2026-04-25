@@ -12,6 +12,8 @@ import { multiSigService } from "../multiSigService";
 import { getIO } from "../../lib/socket";
 import prisma from "../../lib/prisma";
 import dotenv from "dotenv";
+import { anomalyDetectionService } from "../anomalyDetection";
+import { webhookService } from "../webhook";
 
 dotenv.config();
 
@@ -99,6 +101,20 @@ export class MarketRateService {
           comparisonTimestamp: reviewAssessment.comparisonTimestamp,
         }),
       };
+
+      // Perform Anomaly Detection
+      const anomalyCheck = await anomalyDetectionService.checkAnomaly(normalizedCurrency, rate.rate);
+      if (anomalyCheck.isAnomalous) {
+        console.warn(`[MarketRateService] Anomaly detected for ${normalizedCurrency}: Z-Score ${anomalyCheck.zScore.toFixed(2)}σ`);
+        await webhookService.sendPriorityAlert({
+          currency: normalizedCurrency,
+          rate: rate.rate,
+          zScore: anomalyCheck.zScore,
+          mean: anomalyCheck.mean,
+          stdDev: anomalyCheck.stdDev,
+          timestamp: rate.timestamp,
+        });
+      }
 
       if (!reviewAssessment.manualReviewRequired) {
         try {
