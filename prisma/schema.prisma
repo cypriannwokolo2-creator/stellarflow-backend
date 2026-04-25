@@ -6,10 +6,13 @@ datasource db {
   provider = "postgresql"
 }
 
+
 model PriceHistory {
   id          Int       @id @default(autoincrement())
   currency    String    @db.VarChar(10)
   rate        Decimal   @db.Decimal(20, 10)
+  bid         Decimal?  @db.Decimal(20, 10) // Buy price (optional)
+  ask         Decimal?  @db.Decimal(20, 10) // Sell price (optional)
   source      String    @db.VarChar(100)
   timestamp   DateTime  @db.Timestamp(3)
   createdAt   DateTime  @default(now())
@@ -30,6 +33,8 @@ model Currency {
   
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+
+  priceHistory PriceHistory[]
 }
 
 // On-Chain Confirmed Price Model
@@ -108,6 +113,8 @@ model MultiSigPrice {
   @@index([currency, status, requestedAt])
   @@index([status, expiresAt])
   @@index([priceReviewId])
+
+  multiSigSignatures MultiSigSignature[]
 }
 
 // Multi-Sig Signature Model
@@ -130,4 +137,60 @@ model MultiSigSignature {
   @@unique([multiSigPriceId, signerPublicKey])  // Prevent duplicate signatures from same signer
   @@index([multiSigPriceId])
   @@index([signerPublicKey])
+}
+
+// Error log table for tracking provider/fetcher failures
+model ErrorLog {
+  id           Int      @id @default(autoincrement())
+  providerName String   @db.VarChar(200) // e.g., "CoinGecko", "KESRateFetcher"
+  errorMessage String?  @db.Text
+  occurredAt   DateTime @db.Timestamp(3)
+  createdAt    DateTime @default(now())
+
+  @@index([providerName])
+  @@index([occurredAt])
+}
+
+model Relayer {
+  id            Int      @id @default(autoincrement())
+  name          String   @db.VarChar(100)
+  apiKey        String   @unique @db.VarChar(255)
+  isActive      Boolean  @default(true)
+  allowedAssets String[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// Hourly Statistics for smoothing out price spikes
+model HourlyStats {
+  id           Int      @id @default(autoincrement())
+  currency     String   @db.VarChar(10)
+  averageRate  Decimal  @db.Decimal(20, 10)
+  hour         DateTime // The start of the hour this average represents
+  createdAt    DateTime @default(now())
+
+  @@unique([currency, hour])
+  @@index([hour])
+}
+
+// Compliance Metadata Store for relayer performance auditing
+// Tracks latency violations and other compliance events
+model ComplianceMetadata {
+  id                Int       @id @default(autoincrement())
+  relayerId         Int?      // Optional link to relayer (if known)
+  relayerName       String?   @db.VarChar(100)  // Relayer name at time of violation
+  eventType         String    @db.VarChar(50)  // e.g., "LATENCY_VIOLATION", "PAYLOAD_REJECTED"
+  payloadTimestamp  DateTime? @db.Timestamp(3) // Timestamp from the relayer payload
+  receivedAt       DateTime  @db.Timestamp(3)  // When the payload was received
+  latencyDiffMs     Int?      // Calculated latency difference in milliseconds
+  thresholdMs       Int?      // The threshold that was exceeded
+  details           String?   @db.Text         // Additional JSON details about the event
+  resolved          Boolean   @default(false)  // Whether the violation has been addressed
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([relayerId])
+  @@index([eventType])
+  @@index([createdAt])
+  @@index([relayerName, createdAt])
 }

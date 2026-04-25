@@ -1,171 +1,225 @@
-
 import { Router } from "express";
 import { getRate, getAllRates } from "../controllers/marketRatesController";
 import { MarketRateService } from "../services/marketRate";
+import { cacheMiddleware, invalidateCache } from "../cache/CacheMiddleware";
+import { CACHE_CONFIG, CACHE_KEYS } from "../config/redis.config";
+import { isLockdownError } from "../state/appState";
+import { sanitizeMarketRateQuery } from "../middleware/payloadSanitizer";
 
 const marketRateService = new MarketRateService();
 
 const router = Router();
 
 // Get rate for specific currency
-router.get("/rate/:currency", getRate);
+router.get(
+  "/rate/:currency",
+  cacheMiddleware({
+    ttl: CACHE_CONFIG.ttl.marketRates,
+    keyGenerator: (req) => CACHE_KEYS.marketRates.single(req.params.currency),
+  }),
+  getRate,
+);
 
 // Get all available rates
-router.get("/rates", getAllRates);
+router.get(
+  "/rates",
+  cacheMiddleware({
+    ttl: CACHE_CONFIG.ttl.marketRates,
+    keyGenerator: () => CACHE_KEYS.marketRates.all(),
+  }),
+  getAllRates,
+);
 
+// GET /api/v1/market-rates/latest
+router.get(
+  "/latest",
+  cacheMiddleware({
+    ttl: CACHE_CONFIG.ttl.marketRates,
+    keyGenerator: () => CACHE_KEYS.marketRates.latest(),
+  }),
+  async (req, res) => {
+    try {
+      const result = await marketRateService.getLatestPrices();
 
+      if (result.success) {
+        res.json({
+          success: true,
+          data: result.data,
+          ...(result.errors && { errors: result.errors }),
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      console.error("Error fetching latest prices:", error);
 
-// GET /api/market-rates/latest
-router.get("/latest", async (req, res) => {
-  try {
-    const result = await marketRateService.getLatestPrices();
-
-    if (result.success) {
-      res.json({
-        success: true,
-        data: result.data,
-        ...(result.errors && { errors: result.errors }),
-      });
-    } else {
       res.status(500).json({
         success: false,
-        error: result.error,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to fetch latest prices",
       });
     }
-  } catch (error) {
-    console.error("Error fetching latest prices:", error);
+  },
+);
 
-    res.status(500).json({
-      success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Failed to fetch latest prices",
-    });
-  }
-});
+// Pending reviews
+router.get(
+  "/reviews/pending",
+  cacheMiddleware({
+    ttl: CACHE_CONFIG.ttl.marketRates,
+    keyGenerator: () => CACHE_KEYS.marketRates.pendingReviews(),
+  }),
+  async (req, res) => {
+    try {
+      const reviews = await marketRateService.getPendingReviews();
 
-router.get("/reviews/pending", async (req, res) => {
-  try {
-    const reviews = await marketRateService.getPendingReviews();
-
-    res.json({
-      success: true,
-      data: reviews,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Failed to fetch pending price reviews",
-    });
-  }
-});
-
-router.post("/reviews/:id/approve", async (req, res) => {
-  try {
-    const reviewId = Number.parseInt(req.params.id, 10);
-    if (!Number.isFinite(reviewId)) {
-      res.status(400).json({
+      res.json({
+        success: true,
+        data: reviews,
+      });
+    } catch (error) {
+      res.status(500).json({
         success: false,
-        error: "Review ID must be a valid number",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to fetch pending price reviews",
       });
-      return;
     }
+  },
+);
 
-    const { reviewedBy, note } = req.body ?? {};
-    const review = await marketRateService.approvePendingReview(
-      reviewId,
-      reviewedBy,
-      note,
-    );
+// Approve review
+router.post(
+  "/reviews/:id/approve",
+  invalidateCache("market-rates:*"),
+  async (req, res) => {
+    try {
+      const reviewId = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(reviewId)) {
+        res.status(400).json({
+          success: false,
+          error: "Review ID must be a valid number",
+        });
+        return;
+      }
 
-    res.json({
-      success: true,
-      data: review,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Failed to approve price review",
-    });
-  }
-});
+      const { reviewedBy, note } = req.body ?? {};
+      const review = await marketRateService.approvePendingReview(
+        reviewId,
+        reviewedBy,
+        note,
+      );
 
-router.post("/reviews/:id/reject", async (req, res) => {
-  try {
-    const reviewId = Number.parseInt(req.params.id, 10);
-    if (!Number.isFinite(reviewId)) {
-      res.status(400).json({
+      res.json({
+        success: true,
+        data: review,
+      });
+    } catch (error) {
+      res.status(isLockdownError(error) ? error.statusCode : 500).json({
         success: false,
-        error: "Review ID must be a valid number",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to approve price review",
       });
-      return;
     }
+  },
+);
 
-    const { reviewedBy, note } = req.body ?? {};
-    const review = await marketRateService.rejectPendingReview(
-      reviewId,
-      reviewedBy,
-      note,
-    );
+// Reject review
+router.post(
+  "/reviews/:id/reject",
+  invalidateCache("market-rates:*"),
+  async (req, res) => {
+    try {
+      const reviewId = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(reviewId)) {
+        res.status(400).json({
+          success: false,
+          error: "Review ID must be a valid number",
+        });
+        return;
+      }
 
-    res.json({
-      success: true,
-      data: review,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Failed to reject price review",
-    });
-  }
-});
+      const { reviewedBy, note } = req.body ?? {};
+      const review = await marketRateService.rejectPendingReview(
+        reviewId,
+        reviewedBy,
+        note,
+      );
 
-// Health check for all fetchers
-router.get("/health", async (req, res) => {
-  try {
-    const health = await marketRateService.healthCheck();
+      res.json({
+        success: true,
+        data: review,
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to reject price review",
+      });
+    }
+  },
+);
 
-    res.json({
-      success: true,
-      data: health,
-      overallHealthy: Object.values(health).every((status) => status),
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : "Internal server error",
-    });
-  }
-});
+// Health check
+router.get(
+  "/health",
+  cacheMiddleware({
+    ttl: 60,
+    keyGenerator: () => CACHE_KEYS.marketRates.health(),
+  }),
+  async (req, res) => {
+    try {
+      const health = await marketRateService.healthCheck();
 
-// Get supported currencies
-router.get("/currencies", (req, res) => {
-  try {
-    const currencies = marketRateService.getSupportedCurrencies();
+      res.json({
+        success: true,
+        data: health,
+        overallHealthy: Object.values(health).every((status) => status),
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Internal server error",
+      });
+    }
+  },
+);
 
-    res.json({
-      success: true,
-      data: currencies,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : "Internal server error",
-    });
-  }
-});
+// Supported currencies
+router.get(
+  "/currencies",
+  cacheMiddleware({
+    ttl: CACHE_CONFIG.ttl.marketRates,
+    keyGenerator: () => CACHE_KEYS.marketRates.currencies(),
+  }),
+  (req, res) => {
+    try {
+      const currencies = marketRateService.getSupportedCurrencies();
 
-// Get cache status
+      res.json({
+        success: true,
+        data: currencies,
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Internal server error",
+      });
+    }
+  },
+);
+
+// Cache status
 router.get("/cache", (req, res) => {
   try {
     const cacheStatus = marketRateService.getCacheStatus();
