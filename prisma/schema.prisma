@@ -155,6 +155,8 @@ model Relayer {
   id            Int      @id @default(autoincrement())
   name          String   @db.VarChar(100)
   apiKey        String   @unique @db.VarChar(255)
+  /// Ed25519 public key (hex or base64) used to verify X-Stellar-Signature headers
+  publicKey     String?  @db.VarChar(64)
   isActive      Boolean  @default(true)
   allowedAssets String[]
   createdAt     DateTime @default(now())
